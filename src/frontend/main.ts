@@ -1,5 +1,6 @@
 import { Cartridge } from "../core/cartridge";
 import { GameBoy } from "../core/gb";
+import { loadSave, storeSave } from "./storage";
 import { extractZipEntry, isZip, listZip } from "./zip";
 
 const dropZone = document.getElementById("drop") as HTMLDivElement;
@@ -54,8 +55,15 @@ function showRom(rom: Uint8Array, source: string): void {
     .join("");
   hexdumpPre.textContent = "Header region (0x0100-0x0150):\n" + hexdump(rom, 0x100, 0x150);
 
-  startMachine(cart);
+  void startMachine(cart);
 }
+
+// Automation: load a ROM by URL without reloading the page.
+(window as unknown as Record<string, unknown>).gbLoadRom = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  await loadRomData(new Uint8Array(await res.arrayBuffer()), url);
+};
 
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const serialPre = document.getElementById("serial") as HTMLPreElement;
@@ -103,15 +111,49 @@ window.addEventListener("keyup", e => {
   activeGb.joypad.setButton(btn, false);
 });
 
-function startMachine(cart: Cartridge): void {
+let flushTimer: ReturnType<typeof setInterval> | null = null;
+let currentFlush: (() => Promise<void>) | null = null;
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) void currentFlush?.();
+});
+
+async function startMachine(cart: Cartridge): Promise<void> {
+  // Restore battery RAM before the game boots and reads it.
+  if (cart.hasBattery) {
+    try {
+      const saved = await loadSave(cart.saveKey);
+      if (saved) cart.importRam(saved);
+    } catch (e) {
+      console.warn("Save load failed:", e);
+    }
+  }
+
   const gb = new GameBoy(cart);
   activeGb = gb;
   let serialText = "";
+  const serialBytes: number[] = [];
   serialPre.textContent = "";
   gb.bus.onSerial = byte => {
+    serialBytes.push(byte);
     serialText += String.fromCharCode(byte);
     serialPre.textContent = serialText;
   };
+
+  // Persist dirty battery RAM every 2 s and when the tab is hidden.
+  const flush = async (): Promise<void> => {
+    if (!cart.hasBattery || !cart.ramDirty) return;
+    cart.ramDirty = false;
+    try {
+      await storeSave(cart.saveKey, cart.exportRam());
+    } catch (e) {
+      cart.ramDirty = true; // retry on the next tick
+      console.warn("Save store failed:", e);
+    }
+  };
+  if (flushTimer !== null) clearInterval(flushTimer);
+  flushTimer = setInterval(flush, 2000);
+  currentFlush = flush;
 
   const image = new ImageData(
     new Uint8ClampedArray(gb.ppu.framebuffer.buffer), 160, 144,
@@ -126,8 +168,10 @@ function startMachine(cart: Cartridge): void {
   let paused = false;
   (window as unknown as Record<string, unknown>).gbDev = {
     gb,
+    serialBytes,
     runFrames: (n: number) => { for (let i = 0; i < n; i++) gb.runFrame(); present(); },
     setPaused: (p: boolean) => { paused = p; },
+    flushSave: flush,
   };
 
   if (turbo) {
