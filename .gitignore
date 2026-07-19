@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.local
+
+# Local ROMs for testing — never commit
+roms/

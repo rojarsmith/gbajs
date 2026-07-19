@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>gbajs — GB/GBA emulator</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 720px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    h1 { font-size: 1.4rem; }
+    #screen {
+      width: 480px;
+      max-width: 100%;
+      image-rendering: pixelated;
+      background: #9bbc0f;
+      border: 1px solid #888;
+      display: block;
+      margin: 1rem 0;
+    }
+    #drop {
+      border: 2px dashed #888;
+      border-radius: 8px;
+      padding: 1.5rem;
+      text-align: center;
+      margin: 1rem 0;
+    }
+    #drop.hover { border-color: #4a9; background: rgba(68, 170, 153, 0.1); }
+    #header-info { border-collapse: collapse; }
+    #header-info td { padding: 0.15rem 0.75rem 0.15rem 0; }
+    #header-info td:first-child { color: #888; }
+    pre { overflow-x: auto; font-size: 0.8rem; }
+    .ok { color: #2a2; }
+    .bad { color: #c33; }
+  </style>
+</head>
+<body>
+  <h1>gbajs</h1>
+  <p>
+    Step 1: ROM loader &amp; header dump.
+    Drop a Game Boy ROM below, or
+    <button id="load-test">load the built-in test ROM</button>
+  </p>
+
+  <div id="drop">
+    Drop a .gb / .gbc / .zip file here, or
+    <input type="file" id="file" accept=".gb,.gbc,.zip" />
+  </div>
+
+  <canvas id="screen" width="160" height="144"></canvas>
+
+  <table id="header-info"></table>
+  <pre id="hexdump"></pre>
+
+  <script type="module" src="/src/frontend/main.ts"></script>
+</body>
+</html>
