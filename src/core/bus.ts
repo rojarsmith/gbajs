@@ -1,3 +1,4 @@
+import type { APU } from "./apu";
 import type { Cartridge } from "./cartridge";
 import type { Joypad } from "./joypad";
 import type { PPU } from "./ppu";
@@ -13,6 +14,7 @@ export class Bus {
   private timer: Timer;
   private ppu: PPU;
   private joypad: Joypad;
+  private apu: APU;
   private wram = new Uint8Array(0x2000);
   private io = new Uint8Array(0x80);
   private hram = new Uint8Array(0x7f);
@@ -21,11 +23,12 @@ export class Bus {
   /** Blargg's test ROMs print results via the serial port — capture them. */
   onSerial: ((byte: number) => void) | null = null;
 
-  constructor(cart: Cartridge, timer: Timer, ppu: PPU, joypad: Joypad) {
+  constructor(cart: Cartridge, timer: Timer, ppu: PPU, joypad: Joypad, apu: APU) {
     this.cart = cart;
     this.timer = timer;
     this.ppu = ppu;
     this.joypad = joypad;
+    this.apu = apu;
   }
 
   /** Set an IF bit (0=VBlank, 1=STAT, 2=Timer, 3=Serial, 4=Joypad). */
@@ -45,6 +48,7 @@ export class Bus {
     if (addr === 0xff00) return this.joypad.read();
     if (addr >= 0xff04 && addr <= 0xff07) return this.timer.readReg(addr);
     if (addr === 0xff0f) return this.io[0x0f] | 0xe0; // IF upper bits read as 1
+    if (addr >= 0xff10 && addr <= 0xff3f) return this.apu.readReg(addr);
     if (addr >= 0xff40 && addr <= 0xff4b && addr !== 0xff46) return this.ppu.readReg(addr);
     if (addr < 0xff80) return this.io[addr - 0xff00];
     if (addr < 0xffff) return this.hram[addr - 0xff80];
@@ -68,6 +72,7 @@ export class Bus {
       if (addr === 0xff02 && value === 0x81 && this.onSerial) {
         this.onSerial(this.io[0x01]);
       }
+      if (addr >= 0xff10 && addr <= 0xff3f) return this.apu.writeReg(addr, value);
       if (addr === 0xff46) { // OAM DMA: copy 160 bytes from value<<8 (instant)
         const src = value << 8;
         for (let i = 0; i < 0xa0; i++) this.ppu.oam[i] = this.read8(src + i);

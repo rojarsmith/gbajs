@@ -1,7 +1,14 @@
 import { Cartridge } from "../core/cartridge";
 import { GameBoy } from "../core/gb";
+import { GbAudio } from "./audio";
 import { loadSave, storeSave } from "./storage";
 import { extractZipEntry, isZip, listZip } from "./zip";
+
+// Browsers block audio until a user gesture — unlock on the first one.
+const audio = new GbAudio();
+const unlockAudio = (): void => { void audio.unlock(); };
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 
 const dropZone = document.getElementById("drop") as HTMLDivElement;
 const fileInput = document.getElementById("file") as HTMLInputElement;
@@ -168,6 +175,7 @@ async function startMachine(cart: Cartridge): Promise<void> {
   let paused = false;
   (window as unknown as Record<string, unknown>).gbDev = {
     gb,
+    audio,
     serialBytes,
     runFrames: (n: number) => { for (let i = 0; i < n; i++) gb.runFrame(); present(); },
     setPaused: (p: boolean) => { paused = p; },
@@ -202,19 +210,34 @@ async function startMachine(cart: Cartridge): Promise<void> {
     return;
   }
 
-  // Real-time loop: one emulated frame per animation frame. (Display refresh
-  // is assumed ~60 Hz for now; audio-driven pacing arrives with the APU.)
+  // Real-time loop. With audio unlocked, the audio buffer paces emulation
+  // (run until ~90 ms is queued) — correct speed on any display refresh
+  // rate, and no crackle, with one mechanism. Before the first user gesture
+  // the fallback is one emulated frame per animation frame.
+  gb.apu.setSampleRate(audio.sampleRate);
+  const TARGET_BUFFER = 0.09;
   const loop = (): void => {
     if (token !== runToken) return;
     if (!paused) {
       try {
-        gb.runFrame();
+        if (audio.running) {
+          gb.apu.setSampleRate(audio.sampleRate);
+          let guard = 0;
+          while (audio.bufferedSeconds() < TARGET_BUFFER && guard++ < 8) {
+            gb.runFrame();
+            audio.push(gb.apu.drain());
+          }
+        } else {
+          gb.runFrame();
+          gb.apu.drain(); // discard samples while audio is locked
+        }
       } catch (e) {
         statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
         return;
       }
       present();
-      statusEl.textContent = `Running — frame ${gb.ppu.frame}`;
+      statusEl.textContent =
+        `Running — frame ${gb.ppu.frame}` + (audio.running ? "" : " (click/press a key for sound)");
     }
     requestAnimationFrame(loop);
   };
