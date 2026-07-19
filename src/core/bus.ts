@@ -30,6 +30,7 @@ export class Bus {
     if (addr < 0xfe00) return this.wram[addr - 0xe000]; // echo RAM
     if (addr < 0xfea0) return this.oam[addr - 0xfe00];
     if (addr < 0xff00) return 0xff; // unusable region
+    if (addr === 0xff0f) return this.io[0x0f] | 0xe0; // IF upper bits read as 1
     if (addr < 0xff80) return this.io[addr - 0xff00];
     if (addr < 0xffff) return this.hram[addr - 0xff80];
     return this.ie;

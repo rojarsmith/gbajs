@@ -55,16 +55,70 @@ function showRom(rom: Uint8Array, source: string): void {
     .join("");
   hexdumpPre.textContent = "Header region (0x0100-0x0150):\n" + hexdump(rom, 0x100, 0x150);
 
-  // Wire up the core (CPU is a skeleton — this proves the plumbing works).
+  startMachine(cart);
+}
+
+const statusEl = document.getElementById("status") as HTMLParagraphElement;
+const serialPre = document.getElementById("serial") as HTMLPreElement;
+
+let runToken = 0; // bumped on each load to cancel the previous run loop
+
+// setTimeout chains get throttled hard in hidden tabs; a MessageChannel task
+// does not, so the test-harness run loop keeps going regardless of focus.
+const chunkChannel = new MessageChannel();
+let nextChunk: (() => void) | null = null;
+chunkChannel.port1.onmessage = () => nextChunk?.();
+function scheduleChunk(fn: () => void): void {
+  nextChunk = fn;
+  chunkChannel.port2.postMessage(0);
+}
+
+/**
+ * Run the CPU in chunks so the page stays responsive. Serial output (how
+ * Blargg's test ROMs report results) accumulates on the page; the loop stops
+ * on "Passed"/"Failed", on a CPU error, or at a step cap (games will sit in
+ * a wait loop forever until the PPU/interrupts exist — that's expected).
+ */
+function startMachine(cart: Cartridge): void {
   const bus = new Bus(cart);
-  bus.onSerial = b => console.log("[serial]", String.fromCharCode(b));
   const cpu = new CPU(bus);
-  try {
-    for (let i = 0; i < 100 && !cpu.halted; i++) cpu.step();
-    console.log(`CPU ran 100 steps, PC=${hex(cpu.pc, 4)}`);
-  } catch (e) {
-    console.log(`CPU stopped: ${(e as Error).message}`);
-  }
+  let serialText = "";
+  serialPre.textContent = "";
+  bus.onSerial = byte => {
+    serialText += String.fromCharCode(byte);
+    serialPre.textContent = serialText;
+  };
+
+  const token = ++runToken;
+  const STEPS_PER_CHUNK = 1_000_000;
+  const MAX_STEPS = 30_000_000;
+  let steps = 0;
+
+  const chunk = (): void => {
+    if (token !== runToken) return; // a newer ROM was loaded
+    try {
+      for (let i = 0; i < STEPS_PER_CHUNK; i++) cpu.step();
+    } catch (e) {
+      statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
+      return;
+    }
+    steps += STEPS_PER_CHUNK;
+    if (/Passed|Failed/.test(serialText)) {
+      statusEl.textContent = `Test ROM finished after ~${steps / 1e6}M steps.`;
+      return;
+    }
+    if (steps >= MAX_STEPS) {
+      statusEl.textContent =
+        `Paused after ${steps / 1e6}M steps at PC=${hex(cpu.pc, 4)}` +
+        (cpu.halted ? " (halted)" : "") +
+        " — likely waiting for the PPU/interrupts; expected until steps 3-4.";
+      return;
+    }
+    statusEl.textContent = `CPU running… ${steps / 1e6}M steps`;
+    scheduleChunk(chunk);
+  };
+  statusEl.textContent = "CPU running…";
+  chunk();
 }
 
 /** Accepts a raw ROM or a .zip containing one; unwraps zips transparently. */
