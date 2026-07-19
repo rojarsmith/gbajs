@@ -78,6 +78,9 @@ function scheduleChunk(fn: () => void): void {
  * on "Passed"/"Failed", on a CPU error, or at a step cap (games will sit in
  * a wait loop forever until the PPU/interrupts exist — that's expected).
  */
+const canvas = document.getElementById("screen") as HTMLCanvasElement;
+const ctx = canvas.getContext("2d")!;
+
 function startMachine(cart: Cartridge): void {
   const gb = new GameBoy(cart);
   let serialText = "";
@@ -87,36 +90,63 @@ function startMachine(cart: Cartridge): void {
     serialPre.textContent = serialText;
   };
 
-  const token = ++runToken;
-  const STEPS_PER_CHUNK = 1_000_000;
-  const MAX_STEPS = 60_000_000;
-  let steps = 0;
+  const image = new ImageData(
+    new Uint8ClampedArray(gb.ppu.framebuffer.buffer), 160, 144,
+  );
+  const present = (): void => ctx.putImageData(image, 0, 0);
 
-  const chunk = (): void => {
-    if (token !== runToken) return; // a newer ROM was loaded
+  const token = ++runToken;
+  const turbo = new URLSearchParams(location.search).has("turbo");
+
+  // Debug/automation hook: drive the machine manually from the console.
+  (window as unknown as Record<string, unknown>).gbDev = {
+    gb,
+    runFrames: (n: number) => { for (let i = 0; i < n; i++) gb.runFrame(); present(); },
+  };
+
+  if (turbo) {
+    // Uncapped speed for test ROMs (serial output is the result channel).
+    let steps = 0;
+    const chunk = (): void => {
+      if (token !== runToken) return;
+      try {
+        for (let i = 0; i < 1_000_000; i++) gb.step();
+      } catch (e) {
+        statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
+        return;
+      }
+      steps += 1_000_000;
+      present();
+      if (/Passed|Failed/.test(serialText)) {
+        statusEl.textContent = `Test ROM finished after ~${steps / 1e6}M steps.`;
+        return;
+      }
+      if (steps >= 60_000_000) {
+        statusEl.textContent = `Turbo: paused after ${steps / 1e6}M steps at PC=${hex(gb.cpu.pc, 4)}.`;
+        return;
+      }
+      statusEl.textContent = `Turbo… ${steps / 1e6}M steps`;
+      scheduleChunk(chunk);
+    };
+    chunk();
+    return;
+  }
+
+  // Real-time loop: one emulated frame per animation frame. (Display refresh
+  // is assumed ~60 Hz for now; audio-driven pacing arrives with the APU.)
+  const loop = (): void => {
+    if (token !== runToken) return;
     try {
-      for (let i = 0; i < STEPS_PER_CHUNK; i++) gb.step();
+      gb.runFrame();
     } catch (e) {
       statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
       return;
     }
-    steps += STEPS_PER_CHUNK;
-    if (/Passed|Failed/.test(serialText)) {
-      statusEl.textContent = `Test ROM finished after ~${steps / 1e6}M steps.`;
-      return;
-    }
-    if (steps >= MAX_STEPS) {
-      statusEl.textContent =
-        `Paused after ${steps / 1e6}M steps at PC=${hex(gb.cpu.pc, 4)}` +
-        (gb.cpu.halted ? " (halted)" : "") +
-        " — likely waiting for the PPU; expected until step 4.";
-      return;
-    }
-    statusEl.textContent = `CPU running… ${steps / 1e6}M steps`;
-    scheduleChunk(chunk);
+    present();
+    statusEl.textContent = `Running — frame ${gb.ppu.frame}`;
+    requestAnimationFrame(loop);
   };
-  statusEl.textContent = "CPU running…";
-  chunk();
+  requestAnimationFrame(loop);
 }
 
 /** Accepts a raw ROM or a .zip containing one; unwraps zips transparently. */
