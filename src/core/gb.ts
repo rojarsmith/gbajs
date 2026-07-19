@@ -1,6 +1,7 @@
 import { Bus } from "./bus";
 import type { Cartridge } from "./cartridge";
 import { CPU } from "./cpu";
+import { Joypad } from "./joypad";
 import { PPU } from "./ppu";
 import { Timer } from "./timer";
 
@@ -16,13 +17,16 @@ export class GameBoy {
   readonly cpu: CPU;
   readonly timer: Timer;
   readonly ppu: PPU;
+  readonly joypad: Joypad;
 
   constructor(readonly cart: Cartridge) {
     this.timer = new Timer();
     this.ppu = new PPU();
-    this.bus = new Bus(cart, this.timer, this.ppu);
+    this.joypad = new Joypad();
+    this.bus = new Bus(cart, this.timer, this.ppu, this.joypad);
     this.timer.requestInterrupt = () => this.bus.requestInterrupt(2);
     this.ppu.requestInterrupt = bit => this.bus.requestInterrupt(bit);
+    this.joypad.requestInterrupt = () => this.bus.requestInterrupt(4);
     this.cpu = new CPU(this.bus);
   }
 

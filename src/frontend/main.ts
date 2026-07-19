@@ -81,8 +81,31 @@ function scheduleChunk(fn: () => void): void {
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
+// Keyboard -> Joypad button index (see Joypad class for the numbering).
+// Arrows = D-pad, X = A, Z = B, A = Select, S = Start.
+const KEYMAP: Record<string, number> = {
+  ArrowRight: 0, ArrowLeft: 1, ArrowUp: 2, ArrowDown: 3,
+  KeyX: 4, KeyZ: 5, KeyA: 6, KeyS: 7,
+};
+
+let activeGb: GameBoy | null = null;
+
+window.addEventListener("keydown", e => {
+  const btn = KEYMAP[e.code];
+  if (btn === undefined || activeGb === null) return;
+  e.preventDefault();
+  if (!e.repeat) activeGb.joypad.setButton(btn, true);
+});
+window.addEventListener("keyup", e => {
+  const btn = KEYMAP[e.code];
+  if (btn === undefined || activeGb === null) return;
+  e.preventDefault();
+  activeGb.joypad.setButton(btn, false);
+});
+
 function startMachine(cart: Cartridge): void {
   const gb = new GameBoy(cart);
+  activeGb = gb;
   let serialText = "";
   serialPre.textContent = "";
   gb.bus.onSerial = byte => {
@@ -99,9 +122,12 @@ function startMachine(cart: Cartridge): void {
   const turbo = new URLSearchParams(location.search).has("turbo");
 
   // Debug/automation hook: drive the machine manually from the console.
+  // setPaused(true) freezes the real-time loop so runFrames is deterministic.
+  let paused = false;
   (window as unknown as Record<string, unknown>).gbDev = {
     gb,
     runFrames: (n: number) => { for (let i = 0; i < n; i++) gb.runFrame(); present(); },
+    setPaused: (p: boolean) => { paused = p; },
   };
 
   if (turbo) {
@@ -136,14 +162,16 @@ function startMachine(cart: Cartridge): void {
   // is assumed ~60 Hz for now; audio-driven pacing arrives with the APU.)
   const loop = (): void => {
     if (token !== runToken) return;
-    try {
-      gb.runFrame();
-    } catch (e) {
-      statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
-      return;
+    if (!paused) {
+      try {
+        gb.runFrame();
+      } catch (e) {
+        statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
+        return;
+      }
+      present();
+      statusEl.textContent = `Running — frame ${gb.ppu.frame}`;
     }
-    present();
-    statusEl.textContent = `Running — frame ${gb.ppu.frame}`;
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

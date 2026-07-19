@@ -1,4 +1,5 @@
 import type { Cartridge } from "./cartridge";
+import type { Joypad } from "./joypad";
 import type { PPU } from "./ppu";
 import type { Timer } from "./timer";
 
@@ -11,6 +12,7 @@ export class Bus {
   private cart: Cartridge;
   private timer: Timer;
   private ppu: PPU;
+  private joypad: Joypad;
   private wram = new Uint8Array(0x2000);
   private io = new Uint8Array(0x80);
   private hram = new Uint8Array(0x7f);
@@ -19,10 +21,11 @@ export class Bus {
   /** Blargg's test ROMs print results via the serial port — capture them. */
   onSerial: ((byte: number) => void) | null = null;
 
-  constructor(cart: Cartridge, timer: Timer, ppu: PPU) {
+  constructor(cart: Cartridge, timer: Timer, ppu: PPU, joypad: Joypad) {
     this.cart = cart;
     this.timer = timer;
     this.ppu = ppu;
+    this.joypad = joypad;
   }
 
   /** Set an IF bit (0=VBlank, 1=STAT, 2=Timer, 3=Serial, 4=Joypad). */
@@ -39,7 +42,7 @@ export class Bus {
     if (addr < 0xfe00) return this.wram[addr - 0xe000]; // echo RAM
     if (addr < 0xfea0) return this.ppu.oam[addr - 0xfe00];
     if (addr < 0xff00) return 0xff; // unusable region
-    if (addr === 0xff00) return 0xc0 | (this.io[0] & 0x30) | 0x0f; // joypad: none pressed (step 5)
+    if (addr === 0xff00) return this.joypad.read();
     if (addr >= 0xff04 && addr <= 0xff07) return this.timer.readReg(addr);
     if (addr === 0xff0f) return this.io[0x0f] | 0xe0; // IF upper bits read as 1
     if (addr >= 0xff40 && addr <= 0xff4b && addr !== 0xff46) return this.ppu.readReg(addr);
@@ -59,6 +62,7 @@ export class Bus {
     if (addr < 0xfea0) { this.ppu.oam[addr - 0xfe00] = value; return; }
     if (addr < 0xff00) return; // unusable
     if (addr < 0xff80) {
+      if (addr === 0xff00) return this.joypad.write(value);
       if (addr >= 0xff04 && addr <= 0xff07) return this.timer.writeReg(addr, value);
       // Serial: SB = FF01, SC = FF02. Writing 0x81 to SC "sends" SB.
       if (addr === 0xff02 && value === 0x81 && this.onSerial) {
