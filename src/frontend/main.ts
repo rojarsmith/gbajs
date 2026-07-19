@@ -1,6 +1,5 @@
 import { Cartridge } from "../core/cartridge";
-import { Bus } from "../core/bus";
-import { CPU } from "../core/cpu";
+import { GameBoy } from "../core/gb";
 import { extractZipEntry, isZip, listZip } from "./zip";
 
 const dropZone = document.getElementById("drop") as HTMLDivElement;
@@ -80,24 +79,23 @@ function scheduleChunk(fn: () => void): void {
  * a wait loop forever until the PPU/interrupts exist — that's expected).
  */
 function startMachine(cart: Cartridge): void {
-  const bus = new Bus(cart);
-  const cpu = new CPU(bus);
+  const gb = new GameBoy(cart);
   let serialText = "";
   serialPre.textContent = "";
-  bus.onSerial = byte => {
+  gb.bus.onSerial = byte => {
     serialText += String.fromCharCode(byte);
     serialPre.textContent = serialText;
   };
 
   const token = ++runToken;
   const STEPS_PER_CHUNK = 1_000_000;
-  const MAX_STEPS = 30_000_000;
+  const MAX_STEPS = 60_000_000;
   let steps = 0;
 
   const chunk = (): void => {
     if (token !== runToken) return; // a newer ROM was loaded
     try {
-      for (let i = 0; i < STEPS_PER_CHUNK; i++) cpu.step();
+      for (let i = 0; i < STEPS_PER_CHUNK; i++) gb.step();
     } catch (e) {
       statusEl.textContent = `CPU stopped: ${(e as Error).message}`;
       return;
@@ -109,9 +107,9 @@ function startMachine(cart: Cartridge): void {
     }
     if (steps >= MAX_STEPS) {
       statusEl.textContent =
-        `Paused after ${steps / 1e6}M steps at PC=${hex(cpu.pc, 4)}` +
-        (cpu.halted ? " (halted)" : "") +
-        " — likely waiting for the PPU/interrupts; expected until steps 3-4.";
+        `Paused after ${steps / 1e6}M steps at PC=${hex(gb.cpu.pc, 4)}` +
+        (gb.cpu.halted ? " (halted)" : "") +
+        " — likely waiting for the PPU; expected until step 4.";
       return;
     }
     statusEl.textContent = `CPU running… ${steps / 1e6}M steps`;
