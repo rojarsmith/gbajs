@@ -48,6 +48,14 @@ export class Cartridge {
   readonly ram: Uint8Array;
   readonly header: CartHeader;
 
+  // MBC1 state (also the safe fallback for not-yet-implemented MBCs)
+  private readonly hasMbc: boolean;
+  private readonly romBankMask: number;
+  private ramEnabled = false;
+  private romBank = 1;
+  private bank2 = 0; // upper ROM bank bits / RAM bank, depending on mode
+  private mode = 0;
+
   constructor(rom: Uint8Array) {
     if (rom.length < 0x150) {
       throw new Error(`ROM too small to contain a header (${rom.length} bytes)`);
@@ -55,6 +63,10 @@ export class Cartridge {
     this.rom = rom;
     this.header = Cartridge.parseHeader(rom);
     this.ram = new Uint8Array(this.header.ramSize);
+    // 0x00 = ROM only. Everything else gets MBC1 semantics for now; MBC3
+    // (0x0F-0x13) and MBC5 (0x19-0x1E) differ and arrive in roadmap step 6.
+    this.hasMbc = this.header.cartTypeCode !== 0x00;
+    this.romBankMask = Math.max(1, rom.length >> 14) - 1; // banks are 16 KiB
   }
 
   static parseHeader(rom: Uint8Array): CartHeader {
@@ -85,21 +97,38 @@ export class Cartridge {
     };
   }
 
-  /** 0x0000-0x7FFF. Flat for now; MBC banking replaces this later. */
+  /** 0x0000-0x7FFF. */
   readRom(addr: number): number {
-    return addr < this.rom.length ? this.rom[addr] : 0xff;
+    if (!this.hasMbc) return addr < this.rom.length ? this.rom[addr] : 0xff;
+    const bank = addr < 0x4000
+      ? (this.mode ? (this.bank2 << 5) & this.romBankMask : 0)
+      : ((this.bank2 << 5) | this.romBank) & this.romBankMask;
+    return this.rom[(bank << 14) | (addr & 0x3fff)];
   }
 
-  writeRom(_addr: number, _value: number): void {
-    // MBC register writes land here later. Ignored for ROM-only carts.
+  /** Writes into ROM space program the MBC registers. */
+  writeRom(addr: number, value: number): void {
+    if (!this.hasMbc) return;
+    if (addr < 0x2000) this.ramEnabled = (value & 0xf) === 0xa;
+    else if (addr < 0x4000) this.romBank = (value & 0x1f) || 1; // bank 0 selects 1
+    else if (addr < 0x6000) this.bank2 = value & 0x03;
+    else this.mode = value & 1;
+  }
+
+  private ramOffset(offset: number): number {
+    return (this.hasMbc && this.mode ? this.bank2 << 13 : 0) + offset;
   }
 
   /** 0xA000-0xBFFF external RAM (offset 0-0x1FFF). */
   readRam(offset: number): number {
-    return offset < this.ram.length ? this.ram[offset] : 0xff;
+    if (this.hasMbc && !this.ramEnabled) return 0xff;
+    const i = this.ramOffset(offset);
+    return i < this.ram.length ? this.ram[i] : 0xff;
   }
 
   writeRam(offset: number, value: number): void {
-    if (offset < this.ram.length) this.ram[offset] = value;
+    if (this.hasMbc && !this.ramEnabled) return;
+    const i = this.ramOffset(offset);
+    if (i < this.ram.length) this.ram[i] = value;
   }
 }
