@@ -17,26 +17,36 @@ export class GameBoy {
   readonly ppu: PPU;
   readonly joypad: Joypad;
   readonly apu: APU;
+  /** True when the cartridge requests Game Boy Color mode. */
+  readonly cgb: boolean;
 
   constructor(readonly cart: Cartridge) {
+    this.cgb = cart.header.cgbFlag >= 0x80;
     this.timer = new Timer();
     this.ppu = new PPU();
+    this.ppu.cgb = this.cgb;
     this.joypad = new Joypad();
     this.apu = new APU();
-    this.bus = new Bus(cart, this.timer, this.ppu, this.joypad, this.apu);
+    this.bus = new Bus(cart, this.timer, this.ppu, this.joypad, this.apu, this.cgb);
     this.timer.requestInterrupt = () => this.bus.requestInterrupt(2);
     this.ppu.requestInterrupt = bit => this.bus.requestInterrupt(bit);
     this.joypad.requestInterrupt = () => this.bus.requestInterrupt(4);
-    this.cpu = new CPU(this.bus);
+    this.ppu.onHblank = () => this.bus.hdmaHblank();
+    this.cpu = new CPU(this.bus, this.cgb);
   }
 
-  /** Run one instruction and advance all components; returns T-cycles. */
+  /**
+   * Run one instruction and advance all components. Returns VIDEO-time
+   * cycles: in CGB double-speed mode the CPU and timer run twice as fast,
+   * so the PPU/APU (and frame pacing) see half the CPU's cycle count.
+   */
   step(): number {
     const cycles = this.cpu.step();
-    this.timer.step(cycles);
-    this.ppu.step(cycles);
-    this.apu.step(cycles);
-    return cycles;
+    this.timer.step(cycles); // the timer follows the CPU clock
+    const vc = this.bus.doubleSpeed ? cycles >> 1 : cycles;
+    this.ppu.step(vc);
+    this.apu.step(vc);
+    return vc;
   }
 
   /** Advance by (at least) one video frame's worth of cycles. */
