@@ -19,7 +19,8 @@ const FC = 0x10;
 type OpHandler = (c: CPU) => number;
 
 export class CPU {
-  // 8-bit registers (post-boot-ROM DMG state). F only holds its top 4 bits.
+  // 8-bit registers (post-boot-ROM state). F only holds its top 4 bits.
+  // A doubles as the hardware-type signal games check: 0x01 DMG, 0x11 CGB.
   a = 0x01; f = 0xb0; b = 0x00; c = 0x13;
   d = 0x00; e = 0xd8; h = 0x01; l = 0x4d;
   sp = 0xfffe;
@@ -28,7 +29,9 @@ export class CPU {
   imeScheduled = false; // EI enables IME after the *next* instruction
   halted = false;
 
-  constructor(readonly bus: Bus) {}
+  constructor(readonly bus: Bus, cgb = false) {
+    if (cgb) this.a = 0x11;
+  }
 
   // ---- register pairs ---------------------------------------------------
 
@@ -232,7 +235,7 @@ const OPS: (OpHandler | undefined)[] = new Array(256);
 
 // 0x00-0x3F irregular block
 OPS[0x00] = () => 4;                                                    // NOP
-OPS[0x10] = c => { c.fetch8(); return 4; };                             // STOP (2 bytes; treated as NOP)
+OPS[0x10] = c => { c.fetch8(); c.bus.speedSwitch(); return 4; };        // STOP (2 bytes; CGB: speed switch)
 OPS[0x08] = c => { c.bus.write16(c.fetch16(), c.sp); return 20; };      // LD (nn), SP
 
 OPS[0x07] = c => { c.a = c.rlc(c.a); c.f &= ~FZ; return 4; };           // RLCA
