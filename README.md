@@ -1,6 +1,56 @@
-# Building a Game Boy & Game Boy Advance Emulator for the Browser — From Scratch
+# gbajs
 
 **English** | [繁體中文](./README.zh-TW.md)
+
+A Game Boy emulator (with a Game Boy Advance core planned) built **from scratch** in
+TypeScript, running entirely in the browser — an interpreter CPU, a scanline PPU, a
+4-channel APU, bank-switched cartridges, and battery saves, with zero runtime
+dependencies.
+
+![gbajs running Super Mario Land](docs/screenshots/interface.png)
+
+*Super Mario Land running in gbajs. The cartridge image is loaded from a local file —
+no ROMs are included in or distributed with this repository.*
+
+## Features
+
+- **Full SM83 CPU interpreter** — all 512 opcodes, interrupts, EI delay
+- **Scanline PPU** — background, window, sprites, STAT/LYC raster effects
+- **4-channel APU** through an `AudioWorklet`; emulation is **paced by the audio
+  clock**, so speed is exact on any display refresh rate
+- **MBC1 / MBC3 (+RTC) / MBC5** bank switching
+- **Battery saves** persisted to IndexedDB, restored before the game boots
+- Keyboard input, drag-and-drop ROM loading, and direct **.zip** loading via a
+  zero-dependency unzip built on native `DecompressionStream`
+
+## Accuracy
+
+| Test suite | Result |
+|---|---|
+| Blargg `cpu_instrs` | **11/11 — Passed all tests** |
+| Blargg `instr_timing` | **Passed** |
+| [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) (PPU) | **Pixel-perfect** (0/23,040 mismatches) |
+| Mooneye test suite — MBC1 + MBC5 | **20/20** |
+| Blargg `dmg_sound` | 9/12 (the rest need cycle-level wave-RAM timing) |
+
+## Running it
+
+```sh
+npm install
+npm run gen:testrom   # generate homebrew test ROMs (no copyrighted material)
+npm run dev           # then open http://localhost:5173
+```
+
+Drop a `.gb` / `.gbc` / `.zip` file onto the page. Controls:
+<kbd>←↑↓→</kbd> D-pad · <kbd>X</kbd> A · <kbd>Z</kbd> B · <kbd>A</kbd> Select ·
+<kbd>S</kbd> Start. Click or press any key once to enable sound.
+
+The rest of this document is the **from-scratch build guide** the project follows —
+how these machines work and how to emulate them, step by step.
+
+---
+
+# Building a Game Boy & Game Boy Advance Emulator for the Browser — From Scratch
 
 This document explains how console emulators work in principle, what the Game Boy (GB) and
 Game Boy Advance (GBA) hardware actually consists of, and how to build an emulator for both

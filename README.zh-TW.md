@@ -1,6 +1,54 @@
-# 從零開始打造可在瀏覽器執行的 Game Boy 與 GBA 模擬器
+# gbajs
 
 [English](./README.md) | **繁體中文**
+
+一款**從零開始**以 TypeScript 打造、完全在瀏覽器中執行的 Game Boy 模擬器（GBA 核心
+規劃中）——直譯器 CPU、掃描線 PPU、4 聲道 APU、卡帶分頁控制器與電池存檔，零執行期
+依賴。
+
+![gbajs 執行超級瑪利歐樂園](docs/screenshots/interface.png)
+
+*gbajs 執行《超級瑪利歐樂園》的畫面。卡帶映像檔由本機載入——本儲存庫不包含、
+也不散布任何 ROM。*
+
+## 功能特色
+
+- **完整 SM83 CPU 直譯器**——全部 512 個 opcode、中斷、EI 延遲
+- **掃描線 PPU**——背景、視窗、精靈、STAT/LYC 逐行特效
+- **4 聲道 APU**，經 `AudioWorklet` 輸出；模擬**以音訊時鐘帶節奏**，任何螢幕
+  更新率下速度都精準
+- **MBC1 / MBC3（+RTC）/ MBC5** 分頁切換
+- **電池存檔**持久化到 IndexedDB，開機前自動還原
+- 鍵盤輸入、拖放載入 ROM、原生 `DecompressionStream` 實作的零依賴 **.zip** 直讀
+
+## 精確度
+
+| 測試套件 | 結果 |
+|---|---|
+| Blargg `cpu_instrs` | **11/11 — Passed all tests** |
+| Blargg `instr_timing` | **Passed** |
+| [dmg-acid2](https://github.com/mattcurrie/dmg-acid2)（PPU） | **逐像素完全一致**（0/23,040 差異） |
+| Mooneye 測試套件——MBC1 + MBC5 | **20/20** |
+| Blargg `dmg_sound` | 9/12（其餘需要 cycle 級 wave RAM 時序） |
+
+## 執行方式
+
+```sh
+npm install
+npm run gen:testrom   # 產生自製測試 ROM（不含版權素材）
+npm run dev           # 開啟 http://localhost:5173
+```
+
+把 `.gb` / `.gbc` / `.zip` 檔拖進頁面即可。操作：
+<kbd>←↑↓→</kbd> 十字鍵 · <kbd>X</kbd> A · <kbd>Z</kbd> B · <kbd>A</kbd> Select ·
+<kbd>S</kbd> Start。點擊頁面或按任意鍵一次即可開啟聲音。
+
+本文件其餘部分是這個專案所遵循的**從零開始建造指南**——這些主機如何運作、
+如何一步步模擬它們。
+
+---
+
+# 從零開始打造可在瀏覽器執行的 Game Boy 與 GBA 模擬器
 
 本文件說明遊戲機模擬器的運作原理、Game Boy（GB）與 Game Boy Advance（GBA）的實際硬體
 構成，以及如何從一個空資料夾開始，打造一款完全在瀏覽器中執行、同時支援兩種主機的模擬器。

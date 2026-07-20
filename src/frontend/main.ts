@@ -210,6 +210,15 @@ async function startMachine(cart: Cartridge): Promise<void> {
     return;
   }
 
+  // Dev/screenshot helper: ?warp=N advances N frames synchronously before
+  // the first visible frame (e.g. into a game's attract demo).
+  const warp = Number(new URLSearchParams(location.search).get("warp") ?? 0);
+  if (warp > 0) {
+    for (let i = 0; i < warp; i++) gb.runFrame();
+    gb.apu.drain();
+    present();
+  }
+
   // Real-time loop. With audio unlocked, the audio buffer paces emulation
   // (run until ~90 ms is queued) — correct speed on any display refresh
   // rate, and no crackle, with one mechanism. Before the first user gesture
