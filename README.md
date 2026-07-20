@@ -45,8 +45,15 @@ Drop a `.gb` / `.gbc` / `.zip` file onto the page. Controls:
 <kbd>←↑↓→</kbd> D-pad · <kbd>X</kbd> A · <kbd>Z</kbd> B · <kbd>A</kbd> Select ·
 <kbd>S</kbd> Start. Click or press any key once to enable sound.
 
-The rest of this document is the **from-scratch build guide** the project follows —
-how these machines work and how to emulate them, step by step.
+## Documentation
+
+- **[Code Tour](docs/CODE_TOUR.md)** — a file-by-file walkthrough of this codebase:
+  the architecture, the key algorithms (bank math, flag arithmetic, scanline
+  rendering, audio-clock pacing), the testing methodology, and a learning path —
+  written so a software engineer can study it and then build their own emulator from
+  zero.
+- The rest of *this* document is the **from-scratch build guide** the project
+  follows — how these machines work and how to emulate them, step by step.
 
 ---
 
