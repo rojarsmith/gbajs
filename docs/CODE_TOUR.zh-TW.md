@@ -11,10 +11,10 @@
 
 ```text
 1. src/core/cartridge.ts   ROM 解析 + 分頁切換       （約 200 行）
-2. src/core/bus.ts         記憶體映射                 （約 100 行）
+2. src/core/bus.ts         記憶體映射                 （約 160 行）
 3. src/core/cpu.ts         SM83 直譯器                （約 450 行）
 4. src/core/timer.ts       最簡單的時脈裝置           （約 80 行）
-5. src/core/ppu.ts         掃描線渲染                 （約 250 行）
+5. src/core/ppu.ts         掃描線渲染 + CGB           （約 340 行）
 6. src/core/joypad.ts      最小的元件                 （約 50 行）
 7. src/core/apu.ts         聲音合成                   （約 450 行）
 8. src/core/gb.ts          30 行的主機組裝
@@ -30,17 +30,23 @@
 
 ```ts
 step(): number {
-  const cycles = this.cpu.step();   // CPU 執行「一條」指令……
-  this.timer.step(cycles);          // ……然後其他所有元件
-  this.ppu.step(cycles);            //    前進「恰好同樣多」的時間
-  this.apu.step(cycles);
-  return cycles;
+  const cycles = this.cpu.step();
+  this.timer.step(cycles); // the timer follows the CPU clock
+  const vc = this.bus.doubleSpeed ? cycles >> 1 : cycles;
+  this.ppu.step(vc);
+  this.apu.step(vc);
+  return vc;
 }
 ```
 
 Cycle（T-cycle，每秒 4,194,304 個）是*貨幣*。每個元件的 `step()` 接收經過的 cycle
 數並更新內部狀態。沒有任何元件看牆上的時鐘；決定論因此免費而來——這正是整套測試
 策略（§9）得以成立的原因。
+
+`vc` 那一行是 Game Boy Color 的**雙倍速模式**濃縮成的一個分支：遊戲透過 `STOP`
+切換 KEY1 後，CPU 與計時器以兩倍速運轉，但影像與聲音維持真實世界的時序——所以
+PPU/APU（以及使用回傳值的畫格配速）直接收到 *CPU cycle 數的一半*。兩個時脈域，
+一個除法。
 
 注意貫穿全案的解耦技巧：元件之間從不互相持有參照。計時器要觸發中斷時，呼叫的是
 組裝層接好的 callback：
@@ -141,6 +147,35 @@ if (addr === 0xff46) { // OAM DMA：從 value<<8 複製 160 bytes
 （真實 DMA 佔用 160 M-cycles、期間 CPU 只能碰 HRAM；瞬間完成的版本在你去追
 Mooneye 的 OAM DMA 測試之前都*夠*準確。）
 
+### CGB 擴充
+
+彩色硬體把匯流排加寬了，但沒有改變它的形狀。所有 CGB 功能都閘在一個旗標後面,
+讓 DMG 卡帶看到的匯流排*一模一樣*：
+
+- **WRAM 分頁**（`SVBK`）：`C000-CFFF` 固定、`D000-DFFF` 在 7 個 bank 間切換——
+  一個索引函式同時服務讀、寫與 echo RAM：
+
+  ```ts
+  private wramIndex(addr: number): number {
+    return addr < 0xd000 ? addr - 0xc000 : (this.svbk << 12) + (addr - 0xd000);
+  }
+  ```
+
+- **VRAM 分頁**（`VBK`）：匯流排委派給 `ppu.readVram`/`writeVram`，內部套用
+  `(vbk << 13) | offset`——由 PPU 持有兩個 bank，因為渲染需要同時讀它們
+  （tile 在 bank 0/1、屬性永遠在 bank 1）。
+- **KEY1 + `speedSwitch()`**：一個準備位元，加上由 `STOP` 執行的切換。
+- **HDMA/GDMA**（`FF51-FF55`）：一般 DMA 立即複製全部區塊；HBlank DMA 每條掃描線
+  透過 PPU 回呼搬 16 bytes——與中斷相同的解耦模式：
+
+  ```ts
+  hdmaHblank(): void {
+    if (!this.hdmaActive) return;
+    this.hdmaCopyBlock();
+    if (--this.hdmaBlocks === 0) this.hdmaActive = false;
+  }
+  ```
+
 ---
 
 ## 3. CPU——[cpu.ts](../src/core/cpu.ts)
@@ -220,6 +255,9 @@ const willEnable = this.imeScheduled;
 const cycles = handler(this);
 if (willEnable && this.imeScheduled) { this.ime = true; this.imeScheduled = false; }
 ```
+
+這裡也有兩處 CGB 痕跡：開機後的 `A` 暫存器兼作遊戲檢查的硬體型號訊號
+（`0x01` DMG、`0x11` CGB）；`STOP` 會呼叫 `bus.speedSwitch()`——KEY1 雙倍速切換。
 
 **怎麼知道 CPU 寫對了：**Blargg 的 `cpu_instrs` 驗證每條 opcode 的語意、
 `instr_timing` 驗證每條的 cycle 數。在 PPU 存在之前，結果經由匯流排的序列埠
@@ -302,6 +340,34 @@ for (let k = found.length - 1; k >= 0; k--) { /* 繪製 */ }
 像素（顏色 0）自然讓低優先權的透出來。再補兩條規則就完整了：每行 10 個的上限來自
 *掃描*而非繪製；behind-BG 旗標查的是 `lineColor[x]`——背景階段逐像素記下的背景
 色索引。
+
+### CGB：屬性、調色盤、與一套新的優先權秩序
+
+彩色模式重用整套掃描線機器，只改三件事。
+
+**每個 BG tile 多了一個屬性位元組**，位於 VRAM bank 1 的相同圖址——調色盤、
+tile bank、翻轉與一個優先權位元：
+
+```ts
+const attr = this.vram[0x2000 + mi]; // attribute map lives in bank 1
+if (attr & 0x20) px = 7 - px;
+if (attr & 0x40) py = 7 - py;
+const ci = this.tileColor(tileIdx, px, py, attr & 0x08 ? 0x2000 : 0);
+```
+
+**顏色來自調色盤 RAM**，經由索引/資料暫存器對（BCPS/BCPD）帶自動遞增寫入。每筆
+2 位元組是 BGR555；快取在寫入當下轉成 RGBA，5-bit 通道的展開公式正是 acid 測試
+規定的那一條：
+
+```ts
+cache[i >> 1] = 0xff000000 |
+  (((b << 3) | (b >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((r << 3) | (r >> 2));
+```
+
+**優先權重新配線**：精靈只看 OAM 索引（DMG 的 X 座標規則消失——程式碼直接跳過
+排序）、BG 屬性的 bit 7 能讓該 tile 的背景壓在精靈上、而 `LCDC.0`——DMG 的
+「關背景」開關——變成把所有精靈抬到最上層的*主優先權*覆寫。一張 acid 測試同時
+釘死上述全部：**cgb-acid2，逐像素完全一致（0/23,040）**。
 
 ---
 
@@ -417,6 +483,7 @@ while (audio.bufferedSeconds() < TARGET_BUFFER && guard++ < 8) {
 | CPU 時序 | Blargg `instr_timing` | 序列埠 |
 | MBC 分頁 | Mooneye `emulator-only/mbc*` | `LD B,B` 後暫存器 B..L 持有費氏數列 `3,5,8,13,21,34` |
 | PPU | dmg-acid2 | framebuffer 與參考 PNG 的**逐像素 diff** |
+| CGB PPU | cgb-acid2 | 相同的逐像素 diff，換成 15-bit 色彩 |
 | APU | Blargg `dmg_sound` | `0xA000` 的結果位元組（+ 簽章 `DE B0 61`） |
 | 整合 | 超級瑪利歐樂園 | 能開機、播 demo、能玩 |
 
@@ -428,6 +495,10 @@ while (audio.bufferedSeconds() < TARGET_BUFFER && guard++ < 8) {
 - **數字勝過肉眼。**PPU 用 23,040 像素的 diff 簽收（0 差異）、APU 量測取樣數/
   直流平均/過零次數、配速量測 3 秒牆鐘窗口內 99.9% 速度。肉眼曾誤判嘴巴「沒
   渲染」，像素 diff 證明它在。
+- **相信數字，但要校驗量具。**第一次 cgb-acid2 diff 回報 560 個不符——每一個都是
+  ±1~2 的通道偏移。渲染器其實是完美的；是 Chrome 的 canvas *色彩管理*悄悄轉換了
+  參考 PNG。改用 `createImageBitmap(blob, { colorSpaceConversion: "none" })` 解碼後
+  diff 歸零。當量測值與預期相差一個可疑地均勻的小量時，先懷疑量測儀器。
 
 當某個東西壞了又沒有裁判時，最後手段是**軌跡比對（trace diffing）**：這裡與一台
 已知正確的模擬器都逐指令記錄 `PC + 暫存器`，`diff` 會找出第一個分歧點。
@@ -447,18 +518,21 @@ while (audio.bufferedSeconds() < TARGET_BUFFER && guard++ < 8) {
 | 5 | 搖桿矩陣 | 一款遊戲變得能玩 |
 | 6 | MBC + 存檔 | Mooneye MBC 套件 |
 | 7 | APU + 音訊配速 | Blargg `dmg_sound`、速度 ≈ 100% |
+| 8 | Game Boy Color：分頁、調色盤、雙倍速 | cgb-acid2 像素 diff |
 
 對照本程式碼庫的建議練習，難度遞增：
 
 1. **加入 MBC2**（`cartridge.ts`）——mooneye 幫你打分數。
-2. **修好 `dmg_sound` 09/10/12**——需要模擬 wave 聲道在指令*內*的哪個時刻取資料；
+2. **CGB 相容調色盤**：DMG 卡帶在真實 CGB 上會拿到開機 ROM 指派的顏色；本模擬器
+   目前以 DMG 綠階顯示。實作那套調色盤指派。
+3. **修好 `dmg_sound` 09/10/12**——需要模擬 wave 聲道在指令*內*的哪個時刻取資料；
    淺嚐 cycle 級精確度。
-3. **實作 HALT bug**（`cpu.ts` 裡有 TODO）——然後跑 Blargg 的 `halt_bug.gb`。
-4. **Game Boy Color**：VRAM/WRAM 分頁、15-bit 調色盤、雙倍速模式——用 cgb-acid2
-   把關。
-5. **事件排程器**：把逐步推進換成「CPU 一路跑到下一個有趣事件」（README §3），
+4. **實作 HALT bug**（`cpu.ts` 裡有 TODO）——然後跑 Blargg 的 `halt_bug.gb`。
+5. **CGB 模式 APU**：CGB 上 length counter *不會*在斷電後存活（`reset()` 目前保留
+   的是 DMG 行為）——依模式分支，並用 `cgb_sound` 驗證。
+6. **事件排程器**：把逐步推進換成「CPU 一路跑到下一個有趣事件」（README §3），
    量測加速幅度。
-6. **GBA**——用完全相同的方法再走一圈更大的迴圈（README 階段 B）。
+7. **GBA**——用完全相同的方法再走一圈更大的迴圈（README 階段 B）。
 
 要帶走的元課題是：*先測試 ROM 再遊戲、一步一個子系統、一個決定論測具、數值化
 驗證*。是這個迴圈——而不是哪張 opcode 表——讓一個人能從零寫出一台模擬器。

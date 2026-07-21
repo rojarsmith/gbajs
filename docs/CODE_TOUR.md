@@ -12,10 +12,10 @@ the weight. Every excerpt below is real code from this repository.
 
 ```text
 1. src/core/cartridge.ts   ROM parsing + bank switching   (~200 lines)
-2. src/core/bus.ts         the memory map                 (~100 lines)
+2. src/core/bus.ts         the memory map                 (~160 lines)
 3. src/core/cpu.ts         the SM83 interpreter           (~450 lines)
 4. src/core/timer.ts       the simplest clocked device    (~80 lines)
-5. src/core/ppu.ts         scanline rendering             (~250 lines)
+5. src/core/ppu.ts         scanline rendering + CGB       (~340 lines)
 6. src/core/joypad.ts      the smallest component         (~50 lines)
 7. src/core/apu.ts         sound synthesis                (~450 lines)
 8. src/core/gb.ts          the 30-line machine assembly
@@ -31,11 +31,12 @@ is that sentence made executable — [gb.ts](../src/core/gb.ts) *is* the design:
 
 ```ts
 step(): number {
-  const cycles = this.cpu.step();   // CPU runs ONE instruction...
-  this.timer.step(cycles);          // ...then everyone else advances
-  this.ppu.step(cycles);            //    by exactly that much time
-  this.apu.step(cycles);
-  return cycles;
+  const cycles = this.cpu.step();
+  this.timer.step(cycles); // the timer follows the CPU clock
+  const vc = this.bus.doubleSpeed ? cycles >> 1 : cycles;
+  this.ppu.step(vc);
+  this.apu.step(vc);
+  return vc;
 }
 ```
 
@@ -43,6 +44,12 @@ Cycles (T-cycles, 4,194,304 per second) are the *currency*. Every component's `s
 takes elapsed cycles and updates internal state. No component ever looks at a wall
 clock; determinism falls out for free, which is what makes the whole test strategy
 (§9) possible.
+
+The `vc` line is the Game Boy Color's **double-speed mode** expressed in one branch:
+when the game flips KEY1 (via `STOP`), the CPU and timer run twice as fast, but video
+and audio keep real-world timing — so the PPU/APU (and frame pacing, which uses the
+returned value) simply receive *half the CPU's cycle count*. Two clock domains, one
+divide.
 
 Note the decoupling trick used throughout: components never hold references to each
 other. When the timer needs to raise an interrupt, it calls a callback the assembly
@@ -149,6 +156,36 @@ if (addr === 0xff46) { // OAM DMA: copy 160 bytes from value<<8
 (Real DMA takes 160 M-cycles during which the CPU can only touch HRAM; the instant
 version is accurate *enough* until you chase Mooneye's OAM DMA tests.)
 
+### CGB additions
+
+Color hardware widens the bus without changing its shape. Every CGB feature is gated
+behind one flag so DMG cartridges see the old bus *exactly*:
+
+- **WRAM banking** (`SVBK`): `C000-CFFF` is fixed, `D000-DFFF` switches among 7 banks —
+  one index function serves reads, writes, and echo RAM:
+
+  ```ts
+  private wramIndex(addr: number): number {
+    return addr < 0xd000 ? addr - 0xc000 : (this.svbk << 12) + (addr - 0xd000);
+  }
+  ```
+
+- **VRAM banking** (`VBK`): the bus delegates to `ppu.readVram`/`writeVram`, which
+  apply `(vbk << 13) | offset` — the PPU owns both banks because rendering needs them
+  simultaneously (tiles in bank 0/1, attributes always in bank 1).
+- **KEY1 + `speedSwitch()`**: a prepare bit and a toggle that `STOP` executes.
+- **HDMA/GDMA** (`FF51-FF55`): general DMA copies all blocks instantly; HBlank DMA
+  copies 16 bytes per scanline through a PPU callback — the same decoupling pattern as
+  interrupts:
+
+  ```ts
+  hdmaHblank(): void {
+    if (!this.hdmaActive) return;
+    this.hdmaCopyBlock();
+    if (--this.hdmaBlocks === 0) this.hdmaActive = false;
+  }
+  ```
+
 ---
 
 ## 3. CPU — [cpu.ts](../src/core/cpu.ts)
@@ -233,6 +270,10 @@ const willEnable = this.imeScheduled;
 const cycles = handler(this);
 if (willEnable && this.imeScheduled) { this.ime = true; this.imeScheduled = false; }
 ```
+
+Two CGB touches live here too: the post-boot `A` register doubles as the hardware-type
+signal games check (`0x01` DMG, `0x11` CGB), and `STOP` calls `bus.speedSwitch()` — the
+KEY1 double-speed toggle.
 
 **How you know the CPU is right:** Blargg's `cpu_instrs` checks every opcode's
 semantics and `instr_timing` checks every cycle count. Until the PPU exists, results
@@ -321,6 +362,35 @@ highest-priority sprite is drawn last, and transparent pixels (color 0) of a
 high-priority sprite naturally let lower ones show through. Two more rules complete
 it: the 10-per-line limit comes from the *scan*, not the draw; and the behind-BG flag
 consults `lineColor[x]`, the BG color index the background pass recorded per pixel.
+
+### CGB: attributes, palettes, and a new priority order
+
+Color mode reuses the whole scanline machine and changes three things.
+
+**Every BG tile gains an attribute byte** at the same map address in VRAM bank 1 —
+palette, tile bank, flips, and a priority bit:
+
+```ts
+const attr = this.vram[0x2000 + mi]; // attribute map lives in bank 1
+if (attr & 0x20) px = 7 - px;
+if (attr & 0x40) py = 7 - py;
+const ci = this.tileColor(tileIdx, px, py, attr & 0x08 ? 0x2000 : 0);
+```
+
+**Colors come from palette RAM**, written through an index/data register pair
+(BCPS/BCPD) with auto-increment. Each 2-byte entry is BGR555; the cache converts to
+RGBA on write, expanding 5-bit channels exactly as the acid-test spec requires:
+
+```ts
+cache[i >> 1] = 0xff000000 |
+  (((b << 3) | (b >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((r << 3) | (r >> 2));
+```
+
+**Priority is re-wired**: sprites rank by OAM index alone (the DMG's lower-X rule is
+gone — the code just skips the sort), the BG attribute's bit 7 can hold the background
+above sprites per tile, and `LCDC.0` — the DMG's "background off" switch — becomes a
+*master priority* override that puts every sprite on top. One acid test pins all of
+this at once: **cgb-acid2, pixel-perfect (0/23,040)**.
 
 ---
 
@@ -444,6 +514,7 @@ This project never debugged by "play games and squint". Each layer has an oracle
 | CPU timing | Blargg `instr_timing` | serial |
 | MBC banking | Mooneye `emulator-only/mbc*` | registers B..L hold fibonacci `3,5,8,13,21,34` after `LD B,B` |
 | PPU | dmg-acid2 | **pixel diff** of the framebuffer against the reference PNG |
+| CGB PPU | cgb-acid2 | same pixel diff, in 15-bit color |
 | APU | Blargg `dmg_sound` | result byte at `0xA000` (+ signature `DE B0 61`) |
 | Integration | Super Mario Land | it boots, demos, plays |
 
@@ -457,6 +528,12 @@ Two habits made this workable in a browser:
   mismatches), the APU by measuring sample counts, DC mean, and zero-crossings, the
   pacing by measuring 99.9% speed over a wall-clock window. Eyeballs missed a
   "missing" mouth that the pixel diff proved was present.
+- **Trust the numbers, but audit the instrument.** The first cgb-acid2 diff reported
+  560 mismatches — every one a ±1–2 channel shift. The renderer was perfect; Chrome's
+  canvas *color management* was quietly transforming the reference PNG. Decoding with
+  `createImageBitmap(blob, { colorSpaceConversion: "none" })` took the diff to zero.
+  When a measurement disagrees with expectation by a suspiciously uniform epsilon,
+  suspect the measuring device.
 
 When something fails with no oracle, the technique of last resort is **trace
 diffing**: log `PC + registers` per instruction here and in a known-good emulator, and
@@ -478,18 +555,21 @@ with its acceptance test:
 | 5 | joypad matrix | a game becomes playable |
 | 6 | MBCs + saves | Mooneye MBC suite |
 | 7 | APU + audio pacing | Blargg `dmg_sound`, speed ≈ 100% |
+| 8 | Game Boy Color: banking, palettes, double speed | cgb-acid2 pixel diff |
 
 Suggested exercises against this codebase, in rising difficulty:
 
 1. **Add MBC2** (`cartridge.ts`) — mooneye grades you.
-2. **Fix `dmg_sound` 09/10/12** — requires modeling *when* within an instruction the
+2. **CGB compatibility palettes**: DMG carts on a real CGB get boot-ROM-assigned
+   colors; this emulator shows them in DMG green. Implement the palette assignment.
+3. **Fix `dmg_sound` 09/10/12** — requires modeling *when* within an instruction the
    wave channel fetches; a taste of cycle accuracy.
-3. **Implement the HALT bug** (`cpu.ts` has the TODO) — then run Blargg's `halt_bug.gb`.
-4. **Game Boy Color**: VRAM/WRAM banking, 15-bit palettes, double-speed mode — gate
-   with cgb-acid2.
-5. **The event scheduler**: replace tick-along stepping with "run CPU until the next
+4. **Implement the HALT bug** (`cpu.ts` has the TODO) — then run Blargg's `halt_bug.gb`.
+5. **CGB-mode APU**: on CGB, length counters do *not* survive power-off (the DMG
+   behavior `reset()` preserves) — branch on mode and verify with `cgb_sound`.
+6. **The event scheduler**: replace tick-along stepping with "run CPU until the next
    interesting event" (README §3) and measure the speedup.
-6. **The GBA** — a second, bigger loop of exactly the same method (README phase B).
+7. **The GBA** — a second, bigger loop of exactly the same method (README phase B).
 
 The meta-lesson to take away: *test ROMs before games, one subsystem per step, a
 deterministic harness, and numeric verification*. That loop — not any particular
