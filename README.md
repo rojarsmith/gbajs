@@ -9,8 +9,13 @@ dependencies.
 
 ![gbajs running Super Mario Land](docs/screenshots/interface.png)
 
-*Super Mario Land running in gbajs. The cartridge image is loaded from a local file —
-no ROMs are included in or distributed with this repository.*
+*Super Mario Land running in gbajs (original Game Boy mode).*
+
+![gbajs running Super Mario Bros. Deluxe in color](docs/screenshots/smbdx.png)
+
+*Super Mario Bros. Deluxe on the Game Boy Color core — 15-bit palettes, MBC5 banking,
+battery saves. Cartridge images are loaded from local files; no ROMs are included in
+or distributed with this repository.*
 
 ## Features
 

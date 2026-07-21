@@ -126,10 +126,15 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function startMachine(cart: Cartridge): Promise<void> {
-  // Restore battery RAM before the game boots and reads it.
+  // Restore battery RAM before the game boots and reads it. The timeout
+  // guards against IndexedDB hanging (e.g. headless or locked-down
+  // browsers) — booting without the save beats never booting.
   if (cart.hasBattery) {
     try {
-      const saved = await loadSave(cart.saveKey);
+      const saved = await Promise.race([
+        loadSave(cart.saveKey),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 1000)),
+      ]);
       if (saved) cart.importRam(saved);
     } catch (e) {
       console.warn("Save load failed:", e);
@@ -211,12 +216,15 @@ async function startMachine(cart: Cartridge): Promise<void> {
   }
 
   // Dev/screenshot helper: ?warp=N advances N frames synchronously before
-  // the first visible frame (e.g. into a game's attract demo).
-  const warp = Number(new URLSearchParams(location.search).get("warp") ?? 0);
+  // the first visible frame (e.g. into a game's attract demo). Adding
+  // &freeze=1 stops there without starting the loop — exact-frame captures.
+  const params = new URLSearchParams(location.search);
+  const warp = Number(params.get("warp") ?? 0);
   if (warp > 0) {
     for (let i = 0; i < warp; i++) gb.runFrame();
     gb.apu.drain();
     present();
+    if (params.has("freeze")) return;
   }
 
   // Real-time loop. With audio unlocked, the audio buffer paces emulation

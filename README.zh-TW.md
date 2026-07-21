@@ -8,8 +8,12 @@
 
 ![gbajs 執行超級瑪利歐樂園](docs/screenshots/interface.png)
 
-*gbajs 執行《超級瑪利歐樂園》的畫面。卡帶映像檔由本機載入——本儲存庫不包含、
-也不散布任何 ROM。*
+*gbajs 執行《超級瑪利歐樂園》的畫面（原版 Game Boy 模式）。*
+
+![gbajs 以彩色執行超級瑪利歐兄弟 Deluxe](docs/screenshots/smbdx.png)
+
+*Game Boy Color 核心執行《超級瑪利歐兄弟 Deluxe》——15-bit 調色盤、MBC5 分頁、
+電池存檔。卡帶映像檔由本機載入；本儲存庫不包含、也不散布任何 ROM。*
 
 ## 功能特色
 
