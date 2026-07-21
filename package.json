@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "gen:testrom": "node scripts/gen-test-rom.mjs"
+    "gen:testrom": "node scripts/gen-test-rom.mjs",
+    "test:arm7": "tsx scripts/arm7-tests.ts roms/arm7-tests"
   },
   "devDependencies": {
+    "tsx": "^4.23.1",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   }
